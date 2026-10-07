@@ -12,7 +12,7 @@ An interactive playground for learning how machines, GPUs, AI models, containers
 - Turn machines off and explore Kubernetes recovery and pending workloads.
 - Select **Track one request**, then **Next layer**, for a guided explanation.
 
-The default view starts with hardware only. Choose **Busy platform** for an active demonstration, or append `?setup=platform` to the published URL.
+The default view opens **Busy platform** with active traffic. All dots play at quarter speed so the flows are easier to follow; request rates and timings use simulated seconds. Choose **Hardware only**, use **Reset lab**, or append `?setup=basic` for an empty machine.
 
 ## Run locally
 

@@ -9,6 +9,8 @@
   const canvas=$('wires'),ctx=canvas.getContext('2d'),board=$('board');
   const colors={request:'#68dfc6',answer:'#edb97b',exchange:'#ad9aff',trace:'#eaa3d7',deployment:'#82b9fa'};
   const splitValues=[1,2,4,8];
+  // Slow the shared simulation clock so every dot and workload stays synchronized.
+  const playbackRate=.25;
   let catalogFilter='all',mixedTraffic=true;
   const tasks={
     text:{label:'Language / reasoning',art:'model',input:'A prompt or request',action:'Read → reason → generate',output:'Generated text',help:'The model predicts text using its learned weights. Gemma also supports images; this lab uses its text route.'},
@@ -287,7 +289,7 @@
     const texts={platform:['A busy platform, from users to GPUs.','Four applications send different kinds of work at once. Change the demand sliders or try Chat rush. Waiting request cards collect in the overloaded lane. Request another replica to have Kubernetes place a copy on spare hardware. Langfuse records queue time and model time for completed requests.'],shared:['Five models on ONE card.','Qwen3-8B, gpt-oss-20b, YOLO, embeddings, and a reranker share GPU 1. Their base budgets total 46 GB, plus a separate KV reservation for the language models. Mixed traffic is enabled: busy models take turns on the same chip. Drag a model label onto GPU 2 to give it separate compute.'],mixed:['Different models, different jobs.','Eight GPUs hold eight independent workloads: Qwen, two gpt-oss sizes, Gemma, a DeepSeek distillation, YOLO, embeddings, and a reranker. Choose a model in the selector above the diagram to send it traffic. Sharing is enabled: drag a model label onto another GPU to combine workloads if their estimated budgets fit.'],copies:['Two copies, two workers.','Qwen3-8B is loaded onto two GPUs. Each copy can answer a different request. The API spreads requests between them. A Jupyter notebook uses another GPU for its own work.'],giant:['Eight pieces of ONE model.','Full DeepSeek-R1 uses a 720 GB FP8 teaching budget: about 90 GB of base reservation per GPU, plus KV cache, across eight 96 GB GPUs. The purple dots show the pieces exchanging results. Real fit also depends on serving software and workload size.'],distributed:['One model across four machines.','The same eight pieces are now spread across four machines. Purple messages cross machine boundaries. Turn on slow links and watch the queue grow because the pieces have to wait for one another.'],cloud:['The model lives somewhere else.','Your CPU runs the chatbot app. It sends a request to an online provider, where gpt-oss-120b runs. Your local GPUs remain free for notebook work. Turn off the online model connection to see the dependency.']};
     inspector(...texts[name]);render();log('Loaded: '+texts[name][0]);
   }
-  function togglePause(){paused=!paused;document.body.classList.toggle('paused',paused);$('liveLabel').textContent=paused?'Simulation paused':'Simulation running';$('play').textContent=paused?'▶':'Ⅱ';$('play').setAttribute('aria-label',paused?'Resume simulation':'Pause simulation');}
+  function togglePause(){paused=!paused;document.body.classList.toggle('paused',paused);$('liveLabel').textContent=paused?'Simulation paused':'Simulation running · ¼ speed';$('play').textContent=paused?'▶':'Ⅱ';$('play').setAttribute('aria-label',paused?'Resume simulation':'Pause simulation');}
   document.addEventListener('click',e=>{
     const w=e.target.closest('[data-workload]');if(w){selectWorkload(w.dataset.workload);return;}
     const move=e.target.closest('[data-move]');if(move){const p=engine.placements.find(p=>p.id===move.dataset.move);if(p)selectWorkload(p.type,p.id);return;}
@@ -453,11 +455,11 @@
     updateLayerMetrics();updateKVLive();if(trackedRecord)updateTracker(trackedRecord);
     $('statusNote').textContent=note;$('statusNote').classList.toggle('warning',warning);
   }
-  function frame(t){const dt=last?Math.min((t-last)/1000,.1):0;last=t;if(!paused)tick(dt);draw();if(t-lastUI>350){updateMetrics();lastUI=t;}requestAnimationFrame(frame);}
+  function frame(t){const dt=last?Math.min((t-last)/1000,.1):0;last=t;if(!paused)tick(dt*playbackRate);draw();if(t-lastUI>350){updateMetrics();lastUI=t;}requestAnimationFrame(frame);}
   const resizeObserver=new ResizeObserver(()=>measure());resizeObserver.observe(board);
   window.addEventListener('resize',measure);
   document.addEventListener('visibilitychange',()=>{last=0;});
-  preset(new URLSearchParams(location.search).get('setup')==='platform'?'platform':'basic');if(paused){paused=false;togglePause();}requestAnimationFrame(frame);
+  preset(new URLSearchParams(location.search).get('setup')==='basic'?'basic':'platform');if(paused){paused=false;togglePause();}requestAnimationFrame(frame);
   // Expose read-only summaries for local smoke checks and for a curious learner in DevTools.
   window.flowLab={snapshot:()=>({runtime,storageOn,cloudOn,gitops,heal,machineCount:engine.machineCount,vram:engine.vram,route:engine.route,sharing:engine.sharing,mixedTraffic,kv:{...engine.kv},recoveryPending:recoveryPending().map(p=>p.id),demand:{...demand},laneModels:{...laneModels},pendingReplicas:[...pendingReplicas],queues:Object.fromEntries(Object.keys(lanes).map(k=>[k,requests.filter(r=>r.stage==='queue'&&laneOf(r.type)===k).length])),recentTraces:traceRows.slice(0,6),gpuMemory:Array.from({length:8},(_,i)=>engine.gpuUsed(i)),placements:engine.placements.map(p=>({...p,status:engine.status(p)})),completed,queued:requests.filter(r=>r.stage==='queue').length,traceCount,paused}),version:'6.0'};
 })();
