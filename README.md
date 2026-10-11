@@ -10,7 +10,7 @@ An interactive playground for learning how machines, GPUs, AI models, containers
 - Mix chat, vision, embedding, and reranking traffic and watch queues grow.
 - Adjust KV cache assumptions and see their effect on memory capacity.
 - Turn machines off and explore Kubernetes recovery and pending workloads.
-- Select **Track one request**, then **Next layer**, for a guided explanation.
+- Select **Track one request**, then **Next hop**, for a guided explanation.
 
 The default view opens **Busy platform** with active traffic. All dots play at quarter speed so the flows are easier to follow; request rates and timings use simulated seconds. Choose **Hardware only**, use **Reset lab**, or append `?setup=basic` for an empty machine.
 
@@ -27,6 +27,12 @@ In the repository's **Settings → Pages**, choose **Deploy from a branch**, sel
 This is a browser simulation, not an AI inference service. No model weights are downloaded and the displayed requests and Langfuse traces are simulated. GPU memory stays local to individual cards; Kubernetes does not automatically pool it into one address space.
 
 Model memory budgets, KV cache coefficients, throughput, and recovery timing are illustrative assumptions, not benchmarks or deployment guarantees. Real serving engines, model architectures, GPU sharing, and distributed workloads have additional requirements. Official references are linked inside the app. See [the detailed guide](README.txt) for the simulation's assumptions and controls.
+
+## Diagram paths
+
+One cluster contains a column for each machine. Pods sit directly above the GPUs or CPU they use. Solid lines carry requests from People to Service to a ready Pod and back. Hardware and the control plane are not extra request hops.
+
+Dashed blue lines carry one deployment instruction per event. During node failure, only Kubernetes-to-node messages animate. Replacement workloads wait through a visible startup period before accepting requests; Git and Argo CD stay still.
 
 ## Files
 

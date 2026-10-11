@@ -158,7 +158,7 @@
   }
 };
   class Engine {
-    constructor(){this.uid=0;this.kv={enabled:true,contextK:4,slots:1,gbPerK:.125,bits:16};this.sharing=true;this.machineCount=2;this.vram=96;this.split=1;this.route='small';this.slow=false;this.internet=true;this.failed=new Set();this.placements=[];}
+    constructor(){this.now=0;this.uid=0;this.kv={enabled:true,contextK:4,slots:1,gbPerK:.125,bits:16};this.sharing=true;this.machineCount=2;this.vram=96;this.split=1;this.route='small';this.slow=false;this.internet=true;this.failed=new Set();this.placements=[];}
     host(gpu){return Math.floor(gpu/(8/this.machineCount));}
     hosts(p){return p.target==='gpu'?[...new Set(p.gpus.map(g=>this.host(g)))]:p.target==='cpu'?[p.host]:[];}
     kvBudget(type){return this.kv.enabled&&catalog[type].task==='text'?this.kv.contextK*this.kv.slots*this.kv.gbPerK*this.kv.bits/16:0;}
@@ -174,6 +174,7 @@
       if(p.target==='cloud'&&!this.internet)return 'offline';
       if(p.target==='gpu'&&p.gpus.some(g=>this.gpuUsed(g)>this.vram))return 'memory';
       if(p.target==='cpu'&&this.placements.filter(x=>x.target==='cpu'&&x.host===p.host).reduce((n,x)=>n+this.memory(x.type),0)>128)return 'memory';
+      if(p.readyAt>this.now)return 'starting';
       return 'ready';
     }
     capacity(p,activeIds=null){

@@ -29,6 +29,7 @@
 
   let selection=null,selectedId=null,dragPayload=null,paused=matchMedia('(prefers-reduced-motion: reduce)').matches;
   let clock=0,last=0,arrival=0,requests=[],effects=[],completed=0,traceCount=0,dropped=0,latencies=[],requestId=0,focusId=null,focusStage='',lastUI=0,deployUntil=0;
+  let controlEvents=[];
   let paths={},rects={},width=0,height=0,toastTimer=null,presetName='copies';
   const lanes={text:{name:'Chat & reasoning',app:'Chat interface',color:'#68dfc6',art:'model'},vision:{name:'Image detection',app:'Camera application',color:'#f4b58b',art:'vision'},embedding:{name:'Embeddings',app:'Search indexer',color:'#91d1f3',art:'embedding'},rerank:{name:'Reranking',app:'Search results',color:'#efabd5',art:'rerank'}};
   let demand={text:25,vision:25,embedding:25,rerank:25},laneModels={text:'small',vision:'yolo',embedding:'embedding',rerank:'reranker'},credits={text:0,vision:0,embedding:0,rerank:0};
@@ -38,25 +39,47 @@
   function laneRates(){const total=Object.values(demand).reduce((a,b)=>a+b,0),rate=+$('traffic').value;return Object.fromEntries(Object.keys(lanes).map(k=>[k,mixedTraffic?(total?rate*demand[k]/total:0):(laneOf(engine.route)===k?rate:0)]));}
   function chooseType(){if(!mixedTraffic)return engine.route;const total=Object.values(demand).reduce((a,b)=>a+b,0);if(!total)return null;let chosen=null;for(const k of Object.keys(lanes)){if(!demand[k])continue;credits[k]+=demand[k]/total;if(chosen===null||credits[k]>credits[chosen])chosen=k;}credits[chosen]-=1;return laneModels[chosen];}
   function renderLayers(){
-    const enabled=engine.placements.some(p=>p.type==='api');$('platformLayers').hidden=!enabled;$('demandPanel').hidden=!enabled;document.querySelector('.hardware-heading b').textContent=(enabled?'03':'01')+' / PHYSICAL MACHINES & GPUS';
+    const enabled=engine.placements.some(p=>p.type==='api');$('platformLayers').hidden=!enabled;$('softwareLanes').hidden=!enabled;$('softwareHeading').hidden=!enabled;$('demandPanel').hidden=!enabled;
     $('laneControls').innerHTML=Object.entries(lanes).map(([k,l])=>`<div class="demand-control" style="--lane:${l.color}"><label for="demand-${k}">${l.name}<output id="rate-${k}"></output></label><input id="demand-${k}" data-demand="${k}" type="range" min="0" max="100" value="${demand[k]}" aria-label="${l.name} relative demand"><label class="model-picker" for="lane-model-${k}">Model receiving this work</label><select id="lane-model-${k}" data-lane-model="${k}">${Object.entries(catalog).filter(([,c])=>c.task===k).map(([key,c])=>`<option value="${key}" ${laneModels[k]===key?'selected':''}>${c.name}</option>`).join('')}</select></div>`).join('');
-    $('userApps').innerHTML=Object.entries(lanes).map(([k,l])=>`<div class="user-app" id="input-${k}" style="--lane:${l.color}"><div class="window-chrome"><i></i><i></i><i></i><b>${l.app}</b></div><span class="app-illustration">${art(l.art)}</span><span>${tasks[k].input}</span><b id="app-rate-${k}">0 / sec</b></div>`).join('');
+    $('userApps').innerHTML=Object.entries(lanes).map(([k,l])=>`<div class="user-app" id="input-${k}" style="--lane:${l.color}"><div class="window-chrome"><i></i><i></i><i></i><b>People · ${l.app}</b></div><span class="app-illustration">${art(l.art)}</span><span>${tasks[k].input}</span><b id="app-rate-${k}">0 / sec</b></div>`).join('');
     $('softwareLanes').innerHTML=Object.entries(lanes).map(([k,l])=>{
-      const copies=engine.placements.filter(p=>catalog[p.type].kind==='model'&&laneOf(p.type)===k),targetModel=!mixedTraffic&&laneOf(engine.route)===k?engine.route:laneModels[k];
-      return `<section class="software-lane" style="--lane:${l.color}" id="lane-${k}"><div class="lane-title"><b>${l.name}</b><span id="copy-count-${k}"></span></div><div class="request-queue" id="queue-${k}"><div><b id="queue-count-${k}">0 waiting</b><span id="queue-age-${k}"></span></div><div id="queue-cards-${k}" class="queue-cards"></div><small id="queue-note-${k}"></small></div><div class="service-router" id="router-${k}">${runtime==='kubernetes'?'Service address → ready replicas':'App router → ready copies'}<small>${catalog[targetModel].name}</small></div><div class="logical-copies">${copies.length?copies.map(p=>{
-        const c=catalog[p.type],count=p.target==='gpu'?p.gpus.length:1;
-        return `<button class="logical-workload ${runtime} ${engine.status(p)!=='ready'?'unavailable':''}" data-pid="${p.id}" id="logical-${p.id}" draggable="true" style="--tone:${c.color}"><span class="pod-shell-label">${p.target==='cloud'?'Hosted model':runtime==='kubernetes'?count>1?count+' worker Pods':'Pod':runtime==='docker'?'Docker runtime':'Linux process'}</span><span class="container-body"><span class="container-ribs"></span><span class="tag-art">${art(modelArt(c))}</span><b>${c.name}</b><small>${p.target==='cloud'?'Provider runs the software':runtime==='bare'?'Program + model weights':'Container: model server + weights'}</small></span><span class="allocation-label">↧ ${locationOf(p)}${p.target==='gpu'?' · '+engine.hosts(p).map(h=>'M'+(h+1)).join(', '):''}</span><span class="logical-state" id="logical-state-${p.id}">Ready</span></button>`;
-      }).join(''):'<p class="no-copy">No models deployed.<br>Requests for this type will wait.</p>'}</div><button class="add-replica" data-replica="${k}">${runtime==='kubernetes'?'+ Request another replica':'+ Place another copy'}</button><span class="lane-throughput" id="throughput-${k}"></span></section>`;
+      const target=!mixedTraffic&&laneOf(engine.route)===k?engine.route:laneModels[k];
+      return `<section class="software-lane" style="--lane:${l.color}" id="lane-${k}"><div class="service-router" id="router-${k}"><b>${runtime==='kubernetes'?'Service':'App router'} · ${l.name}</b><small>${catalog[target].name} · ready replicas only</small></div><div class="lane-title"><span id="copy-count-${k}"></span></div><div class="request-queue" id="queue-${k}"><div><b id="queue-count-${k}">0 waiting</b><span id="queue-age-${k}"></span></div><div id="queue-cards-${k}" class="queue-cards"></div><small id="queue-note-${k}"></small></div><button class="add-replica" data-replica="${k}">${runtime==='kubernetes'?'+ Request another replica':'+ Place another copy'}</button><span class="lane-throughput" id="throughput-${k}"></span></section>`;
     }).join('');
-    $('softwareTitle').textContent=runtime==='kubernetes'?'02 / SOFTWARE · PODS CONTAIN CONTAINERS':runtime==='docker'?'02 / SOFTWARE · DOCKER CONTAINERS':'02 / SOFTWARE · LINUX PROGRAMS';
-    $('controllerArt').innerHTML=art(runtime==='kubernetes'?'kubernetes':runtime==='docker'?'docker':'linux');
-    $('controllerTitle').textContent=runtime==='kubernetes'?'Kubernetes control plane':runtime==='docker'?'Docker on each machine':'You start the programs';
-    $('controllerHelp').textContent=runtime==='kubernetes'?'The scheduler places requested replicas on available hardware. Services give ready Pods stable addresses. The app holds queues and chooses available copies. Automatic failover is on by default. Automatic scaling from traffic needs a separately configured autoscaler.':'You choose where each copy runs. An application can route requests to copies without Kubernetes. Switching to Kubernetes adds scheduling and Pod management.';
+    $('softwareTitle').textContent=runtime==='kubernetes'?'REQUEST PATH · SERVICE → READY POD':'REQUEST PATH · ROUTER → RUNNING WORKLOAD';
+    $('controllerPanel').hidden=runtime!=='kubernetes';
+    $('controllerArt').innerHTML=art('kubernetes');$('controllerTitle').textContent='Placement & recovery';
+    $('controllerHelp').textContent='Dashed blue lines carry placement instructions once per event. Requests use the solid lines above. A failed Pod is recreated on a healthy node, then becomes Ready after model loading. Git and Argo CD stay still during recovery.';
     $('pendingList').innerHTML=pendingReplicas.map((p,i)=>`<span>${catalog[p.type].name} · Pending: no suitable free resources <button data-cancel-pending="${i}" aria-label="Cancel pending replica">×</button></span>`).join('');
-    $('langfusePanel').hidden=!engine.placements.some(p=>p.type==='langfuse');
-    $('langfuseArt').innerHTML=art('trace');
+    $('langfusePanel').hidden=!engine.placements.some(p=>p.type==='langfuse');$('langfuseArt').innerHTML=art('trace');
     renderRecovery();renderKV();updateLayerMetrics();
   }
+  function podMarkup(p,g=null){
+    const c=catalog[p.type],status=engine.status(p),first=g===null||g===p.gpus[0],id='logical-'+p.id+(first?'':'-g'+g);
+    const unit=p.target==='cloud'?'Hosted model':modes[runtime].unit;
+    const position=p.target==='gpu'?'GPU '+(g+1)+(p.gpus.length>1?' · worker '+(p.gpus.indexOf(g)+1)+'/'+p.gpus.length:''):p.target==='cpu'?'CPU · Machine '+(p.host+1):'Online provider';
+    return `<div class="hardware-model-item"><button id="${id}" class="logical-workload ${runtime} ${status!=='ready'?'unavailable':''}" data-pid="${p.id}" draggable="true" style="--tone:${c.color}"><span class="pod-shell-label">${unit} · ${p.id}${p.gpus.length>1?'.'+(p.gpus.indexOf(g)+1):''}</span><span class="container-body"><span class="container-ribs"></span><span class="tag-art">${art(modelArt(c))}</span><b>${c.name}</b><small>${runtime==='bare'?'Program + model weights':'Container · '+(c.kind==='model'?'model server + weights':c.name)}</small></span><span class="placement-caption">${position} · ~${(engine.memory(p.type)/(p.gpus.length||1)).toFixed(1)} GB</span><span class="logical-state" data-state-pid="${p.id}">${status==='starting'?'Starting · loading model':status==='ready'?'Ready':'Unavailable'}</span></button>${removeControl(p)}</div>`;
+  }
+  function renderRack(){
+    board.dataset.nodes=engine.machineCount;const per=8/engine.machineCount;$('rack').className='rack unified-rack';$('rack').style.setProperty('--nodes',engine.machineCount);
+    $('rack').innerHTML=Array.from({length:engine.machineCount},(_,h)=>{
+      const cpu=engine.placements.filter(p=>p.target==='cpu'&&p.host===h),ram=cpu.reduce((n,p)=>n+engine.memory(p.type),0);
+      const gpuHTML=Array.from({length:per},(_,g)=>{const n=h*per+g,jobs=engine.gpuJobs(n),used=engine.gpuUsed(n);
+        const segments=jobs.map(p=>'<i style="width:'+(catalog[p.type].memory/p.gpus.length/96*100)+'%;background:'+catalog[p.type].color+'"></i><i class="kv-segment" style="width:'+(engine.kvBudget(p.type)/p.gpus.length/96*100)+'%"></i>').join('');
+        return `<section class="device-stack drop-target" data-target="gpu" data-index="${n}" tabindex="0" role="group" aria-label="Place on GPU ${n+1}"><div class="device-pods">${jobs.map(p=>podMarkup(p,n)).join('')||'<span class="empty-pod-slot">Drop a model above this GPU</span>'}</div><div id="gpu-${n}" class="gpu ${runtime} ${jobs.length?'occupied':''}" data-index="${n}"><span class="gpu-head"><span>GPU ${String(n+1).padStart(2,'0')}</span><span>96 GB</span></span><span class="gpu-art">${art('gpu')}</span><span class="software-unit">RTX PRO 6000 · ${engine.sharing?'shared access':'dedicated access'}</span><span class="gpu-detail">${used.toFixed(1)} / 96 GB · ${Math.max(0,96-used).toFixed(1)} GB free</span><span class="vram-track segmented">${segments}</span><span class="kv-live" id="kv-live-${n}"></span></div></section>`;
+      }).join('');
+      return `<section class="host ${engine.failed.has(h)?'offline':''}" id="host-${h}"><div class="host-heading" id="node-port-${h}"><i class="machine-light"></i><b>Machine ${h+1}</b><small>${per} GPUs</small><button class="power" data-power="${h}" aria-label="${engine.failed.has(h)?'Power on':'Power off'} machine ${h+1}" aria-pressed="${!engine.failed.has(h)}">⏻</button></div><div class="server-art">${art('server')}</div><div class="node-workload-label">${modes[runtime].unit}s live directly above their hardware</div><div class="gpu-grid">${gpuHTML}</div><section class="device-stack cpu-stack drop-target" id="cpu-${h}" data-target="cpu" data-index="${h}" role="group" tabindex="0" aria-label="Place software on machine ${h+1} CPU"><div class="device-pods cpu-pods">${cpu.map(p=>podMarkup(p)).join('')||'<span class="empty-pod-slot">Drop CPU software here</span>'}</div><div class="cpu-area"><span class="cpu-art">${art('cpu')}</span><div class="cpu-content"><div class="area-label"><span>CPU + RAM</span><small>${ram.toFixed(1)} / 128 GB</small></div></div></div></section></section>`;
+    }).join('');
+  }
+  function startControl(ids,kind='placement',full=gitops){
+    if(runtime!=='kubernetes')return;
+    const hosts=[...new Set(ids.flatMap(id=>{const p=engine.placements.find(p=>p.id===id);return p?engine.hosts(p):[];}))];
+    if(!hosts.length)return;let at=clock;
+    if(full&&gitops){controlEvents.push({key:'git',kind,start:at,duration:1.2},{key:'argo',kind,start:at+1.2,duration:1.2});at+=2.4;}
+    for(const h of hosts)controlEvents.push({key:'schedule-node-'+h,kind,start:at,duration:1.2});
+  }
+  function controlActive(e){return clock>=e.start&&clock<e.start+e.duration;}
+
   function updateLayerMetrics(){
     if(!$('queue-count-text'))return;
     const rates=laneRates(),activeIds=new Set(requests.filter(r=>['travel','compute'].includes(r.stage)).map(r=>r.pid));
@@ -76,7 +99,10 @@
       const recent=finished.filter(r=>r.task===k&&clock-r.at<10),windowSize=Math.max(1,Math.min(10,clock-trafficEpoch));
       $('throughput-'+k).textContent=(recent.length/windowSize).toFixed(1)+' results / sec · '+copies.filter(p=>activeIds.has(p.id)).length+' busy copies';
     }
-    for(const p of engine.placements){const state=$('logical-state-'+p.id);if(!state)continue;state.textContent=engine.status(p)!=='ready'?(engine.status(p)==='memory'?'Memory budget exceeds capacity':runtime==='kubernetes'&&heal&&p.target!=='cloud'?'Pending recovery':'Offline / unavailable'):activeIds.has(p.id)?'Processing request':'Ready';$('logical-'+p.id).classList.toggle('processing',activeIds.has(p.id));}
+    for(const p of engine.placements){
+      const status=engine.status(p);
+      document.querySelectorAll('[data-state-pid="'+p.id+'"]').forEach(state=>{state.textContent=status==='starting'?'Starting · loading model':status!=='ready'?(status==='memory'?'Memory exceeds capacity':runtime==='kubernetes'&&heal?'Pending recovery':'Offline'):activeIds.has(p.id)?'Processing request':'Ready';const pod=state.closest('.logical-workload');pod.classList.toggle('processing',activeIds.has(p.id));pod.classList.toggle('unavailable',status!=='ready');});
+    }
     document.querySelectorAll('.gpu').forEach(g=>{const types=new Set(engine.gpuJobs(+g.dataset.index).map(p=>p.type));g.classList.toggle('hot',requests.filter(r=>r.stage==='queue'&&types.has(r.type)).length>8);});
     const lf=engine.service('langfuse');$('langfuseStatus').textContent=lf?'Receiving application traces':'Trace collection offline';
     const recentTraces=traceRows.slice(0,6);$('traceRows').innerHTML=recentTraces.length?recentTraces.map(t=>`<button class="trace-row" data-open-trace="${t.id}"><span>#${t.id} · ${t.model}<small>${t.location}</small></span><span>${t.wait.toFixed(1)}s<small>waiting</small></span><span>${t.total.toFixed(1)}s<small>total</small></span></button>`).join(''):'<p class="hint">Completed requests appear here after the app sends a trace.</p>';
@@ -87,7 +113,7 @@
     engine.split=parts;
     const choices=Array.from({length:8},(_,g)=>g).filter(g=>!engine.failed.has(engine.host(g))).sort((a,b)=>engine.gpuJobs(a).length-engine.gpuJobs(b).length||engine.gpuUsed(a)-engine.gpuUsed(b));
     for(const g of choices){if(parts>1){const free=choices.filter(x=>!engine.gpuJobs(x).length);if(free.length<parts)break;}
-      const result=engine.place(type,'gpu',g);if(result.ok){engine.split=oldSplit;deployUntil=clock+4;log('Scheduler placed '+c.name+' on '+locationOf(result.placement)+'.');return true;}}
+      const result=engine.place(type,'gpu',g);if(result.ok){engine.split=oldSplit;startControl([result.placement.id]);log('Scheduler placed '+c.name+' on '+locationOf(result.placement)+'.');return true;}}
     engine.split=oldSplit;return false;
   }
   function requestReplica(lane){const type=mixedTraffic?laneModels[lane]:laneOf(engine.route)===lane?engine.route:laneModels[lane];if(runtime!=='kubernetes'){selectWorkload(type);notify('Choose a GPU for the new '+catalog[type].name+' copy.');return;}if(!scheduleReplica(type)){pendingReplicas.push({type});notify('Replica requested. It is Pending until suitable GPU resources are available.');}presetName='';render();}
@@ -100,14 +126,13 @@
   function layerPaths(){
     if($('platformLayers').hidden)return;
     for(const [k,l] of Object.entries(lanes)){
-      const a=port($('input-'+k)),b=port($('queue-'+k),'top');paths['entry-'+k]=elbow(a,b,a.y+12,l.color);
+      const a=port($('input-'+k)),b=port($('router-'+k),'top');paths['entry-'+k]=elbow(a,b,a.y+16,l.color);
     }
+    const rackTop=rect($('rack'))?.y||0;
     for(const p of engine.placements.filter(p=>catalog[p.type].kind==='model')){
-      const k=laneOf(p.type),logical=$('logical-'+p.id),q=port($('queue-'+k)),target=port(logical,'top');
-      paths['model-'+p.id]=elbow(q,target,q.y+12,lanes[k].color);
-      const a=port(logical),b=port(elementFor(p),'top');paths['binding-'+p.id]=elbow(a,b,a.y+20,'#91a9b8','dash');
-      if(engine.service('langfuse')){const t=port($('langfusePanel'),'top');paths['observe-'+p.id]=elbow(port(logical,'right'),t,t.y-12,colors.trace);}
-      if(runtime==='kubernetes'){const scheduler=port($('controllerPanel'));paths['schedule-'+p.id]=elbow(scheduler,target,scheduler.y+8,colors.deployment,'dash');}
+      const k=laneOf(p.type),logical=elementFor(p),a=port($('router-'+k),'right'),b=port(logical,'top');
+      if(a&&b){const host=p.target==='cloud'?null:$('host-'+engine.hosts(p)[0]),box=rect(host),gutter=box?box.x-10:a.x+12;paths['model-'+p.id]=path([a,{x:a.x+7,y:a.y},{x:a.x+7,y:rackTop-30},{x:gutter,y:rackTop-30},{x:gutter,y:b.y-10},{x:b.x,y:b.y-10},b],lanes[k].color);}
+      if(engine.service('langfuse')){const a=port(logical,'right'),b=port($('langfusePanel'),'top');if(a&&b)paths['observe-'+p.id]=path([a,{x:width-10,y:a.y},{x:width-10,y:b.y-10},{x:b.x,y:b.y-10},b],colors.trace);}
     }
   }
   document.addEventListener('input',e=>{if(e.target.dataset.demand){demand[e.target.dataset.demand]=+e.target.value;credits={text:0,vision:0,embedding:0,rerank:0};updateLayerMetrics();}});
@@ -122,21 +147,23 @@
 
   let lastRecovery=0,trackedRecord=null,trackStepMode=true,trackerPaused=false;
   const contextSteps=[1,2,4,8,16,32,64,128];
-  const trackerStages=['entry','queue','travel','compute','return','done'];
+  const trackerStages=['people','service','pod','response'];
+  const journeyStage=r=>({entry:'people',queue:'service',travel:'pod',compute:'pod',return:'response',done:'response'})[r.stage];
   function recoverWorkloads(){
     if(runtime!=='kubernetes'||!heal)return [];
     const before=new Map(engine.placements.map(p=>[p.id,locationOf(p)])),moved=engine.recover();
     if(moved.length){
       for(const r of requests){if(moved.includes(r.pid)){r.stage='queue';r.pid=null;r.progress=0;r.retries=(r.retries||0)+1;}}
-      deployUntil=clock+5;lastRecovery=clock;
+      lastRecovery=clock;startControl(moved,'recovery',false);
+      for(const id of moved){const p=engine.placements.find(p=>p.id===id);p.readyAt=clock+2.2;}
       for(const id of moved){const p=engine.placements.find(p=>p.id===id);log('Recovered '+catalog[p.type].name+': '+before.get(id)+' → '+locationOf(p)+'.');}
     }
     return moved;
   }
   function recoveryPending(){return runtime==='kubernetes'&&heal?engine.placements.filter(p=>p.target!=='cloud'&&engine.status(p)==='offline'):[];}
   function renderRecovery(){
-    const pending=recoveryPending();$('recoveryBanner').hidden=runtime!=='kubernetes';
-    $('recoveryBanner').textContent=!heal?'Automatic failover is off.':pending.length?pending.length+' workload(s) Pending recovery. Free suitable memory or power on another machine; the scheduler will retry.':'Automatic failover is on. Workloads are recreated on working machines when they fit.';
+    const pending=recoveryPending(),starting=engine.placements.filter(p=>engine.status(p)==='starting');$('recoveryBanner').hidden=runtime!=='kubernetes';
+    $('recoveryBanner').textContent=!heal?'Automatic failover is off.':starting.length?starting.length+' workload(s) restarting on healthy machines. Requests wait for Ready copies.':pending.length?pending.length+' workload(s) Pending recovery. Free suitable memory or power on another machine; the scheduler will retry.':'Automatic failover is on. Workloads are recreated on working machines when they fit.';
     $('recoveryBanner').classList.toggle('waiting',pending.length>0);
     $('recoveryPending').innerHTML=pending.map(p=>'<span>'+catalog[p.type].name+' · '+(p.target==='cpu'?'needs a CPU slot and '+engine.memory(p.type).toFixed(1)+' GB RAM':p.gpus.length>1?'needs '+p.gpus.filter(g=>engine.failed.has(engine.host(g))).length+' spare dedicated GPU(s), '+(engine.memory(p.type)/p.gpus.length).toFixed(1)+' GB per worker':'needs '+engine.memory(p.type).toFixed(1)+' GB on a working GPU')+'</span>').join('');
   }
@@ -162,23 +189,23 @@
     for(const r of requests){if(catalog[r.type].task==='text'&&['travel','compute'].includes(r.stage)){r.stage='queue';r.pid=null;r.progress=0;r.retries=(r.retries||0)+1;}}
     presetName='';render();notify('KV budget updated. In-progress language requests restart from the queue. Copies that exceed memory must be resized or removed.');
   }
-  function trackerTarget(r){const k=laneOf(r.type),p=engine.placements.find(p=>p.id===r.pid);return r.stage==='entry'||r.stage==='return'?$('input-'+k):r.stage==='queue'?$('queue-'+k):r.stage==='travel'?$('logical-'+r.pid):r.stage==='compute'?(p?.target==='gpu'?$('gpu-'+p.gpus[0]):elementFor(p)):engine.service('langfuse')?$('langfusePanel'):$('input-'+k);}
+  function trackerTarget(r){const k=laneOf(r.type);return r.stage==='entry'||r.stage==='return'||r.stage==='done'?$('input-'+k):r.stage==='queue'?$('router-'+k):elementFor(engine.placements.find(p=>p.id===r.pid));}
   function updateTracker(r){
     if(!r)return;trackedRecord=r;$('requestTracker').hidden=false;
     const p=engine.placements.find(p=>p.id===r.pid),c=catalog[r.type],place=p?locationOf(p):(r.lastLocation||'waiting for placement'),k=laneOf(r.type);
     if(p)r.lastLocation=place;
     const texts={
-      entry:['User interface','The '+lanes[k].app.toLowerCase()+' creates a request for '+c.name+'. '+tasks[k].input+' is sent to the application.'],
-      queue:['Application & routing','The CPU application holds this request in its queue. It needs a ready '+c.name+' copy with a free request slot and enough memory. Other model types cannot serve it automatically.'],
-      travel:[runtime==='kubernetes'?'Service → Pod → container':runtime==='docker'?'Application → container':'Application → process',runtime==='kubernetes'?'The app selects a ready replica behind the model service. Its Pod contains the model-server container. Kubernetes placed that workload on '+place+'.':'The app sends this request to the model process running on '+place+'.'],
-      compute:['Hardware & KV cache',place+' performs the model calculations. '+(c.task==='text'&&engine.kv.enabled?'The model reuses attention keys and values in its KV cache. This copy reserves '+engine.kvBudget(r.type).toFixed(2)+' GB for '+engine.kv.slots+' conversation slot(s); live usage grows as tokens are processed.':'This workload does not use the language-model KV budget in this lab.')+(p?.gpus.length>1?' Purple messages show model workers cooperating.':'')],
+      entry:['People · request created','The '+lanes[k].app.toLowerCase()+' creates a request for '+c.name+'. '+tasks[k].input+' is sent to the application.'],
+      queue:['Service · waiting for a ready replica','The CPU application holds this request in its queue. It needs a ready '+c.name+' copy with a free request slot and enough memory. Other model types cannot serve it automatically.'],
+      travel:[runtime==='kubernetes'?'Service → running Pod':runtime==='docker'?'Router → container':'Router → process','The request follows the solid line to a ready '+c.name+' replica on '+place+'. The model server receives it here. The control plane is not on this request path.'],
+      compute:['Pod · processing internally','The request stays inside this model-server workload while '+place+' performs its calculations. Hardware is a resource used by the Pod, not another network hop. '+(c.task==='text'&&engine.kv.enabled?'The model reuses attention keys and values in its KV cache. This copy reserves '+engine.kvBudget(r.type).toFixed(2)+' GB for '+engine.kv.slots+' conversation slot(s); live usage grows as tokens are processed.':'This workload does not use the language-model KV budget in this lab.')+(p?.gpus.length>1?' Purple messages show model workers cooperating.':'')],
       return:['Result → user interface',tasks[k].output+' travels back through the app to the user. The request’s temporary KV data can be released; this simulation retains the configured cache reservation for the next conversation.'],
-      done:['Langfuse & completion',r.traced?'The application sent a trace to Langfuse: '+r.wait.toFixed(2)+'s queued, '+r.computeTime.toFixed(2)+'s model work, '+((r.doneAt||clock)-r.born).toFixed(2)+'s total. Langfuse records this journey; it does not route or execute the model.':'The result was delivered. Langfuse was unavailable or disabled, so no trace was saved for this request.']
+      done:['Response delivered',r.traced?'The application sent a trace to Langfuse: '+r.wait.toFixed(2)+'s queued, '+r.computeTime.toFixed(2)+'s model work, '+((r.doneAt||clock)-r.born).toFixed(2)+'s total. Langfuse records this journey; it does not route or execute the model.':'The result was delivered. Langfuse was unavailable or disabled, so no trace was saved for this request.']
     },item=texts[r.stage];
     $('trackerTitle').textContent='Request #'+r.id+' · '+c.name;$('trackerLayer').textContent=item[0];$('trackerNarration').textContent=item[1];
     $('trackerTiming').textContent='Wait '+r.wait.toFixed(1)+'s · model work '+r.computeTime.toFixed(1)+'s · '+(r.retries||0)+' retries';
-    $('trackerSteps').innerHTML=trackerStages.map((s,i)=>'<span class="'+(s===r.stage?'current':r.visited?.[s]?'visited':'')+'">'+(i+1)+' '+['Interface','App queue','Container / Pod','GPU / KV','Response','Trace'][i]+'</span>').join('');
-    $('trackerNext').disabled=r.stage==='done';$('trackerNext').textContent=r.stage==='done'?'Request complete':paused?'Next layer →':'Running to next layer…';$('trackStepMode').checked=trackStepMode;
+    $('trackerSteps').innerHTML=trackerStages.map((s,i)=>'<span class="'+(s===journeyStage(r)?'current':r.visited?.[s]?'visited':'')+'">'+(i+1)+' '+['People','Service / queue',runtime==='kubernetes'?'Pod':modes[runtime].unit,'Response'][i]+'</span>').join('');
+    $('trackerNext').disabled=r.stage==='done';$('trackerNext').textContent=r.stage==='done'?'Request complete':paused?'Next hop →':'Running to next hop…';$('trackStepMode').checked=trackStepMode;
     document.querySelectorAll('.tracking-focus').forEach(el=>el.classList.remove('tracking-focus'));trackerTarget(r)?.classList.add('tracking-focus');
   }
   $('trackerNext').onclick=()=>{if(trackedRecord?.stage!=='done'&&paused){trackerPaused=false;togglePause();}};
@@ -201,23 +228,13 @@
   function notify(text,error=false){$('toast').textContent=text;$('toast').className='show'+(error?' error':'');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').className='',5200);}
   function log(text){const li=document.createElement('li');const stamp=document.createElement('time');stamp.textContent=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});li.append(stamp,document.createTextNode(text));$('eventLog').prepend(li);while($('eventLog').children.length>4)$('eventLog').lastChild.remove();}
   function inspector(title,text,label='WHAT YOU ARE SEEING',actions=''){$('inspectorTitle').textContent=title;$('inspectorText').textContent=text;$('inspectorLabel').textContent=label;$('inspectorActions').innerHTML=actions;if(!focusId)$('traceSteps').hidden=true;}
-  function resetTraffic(){trackedRecord=null;trackerPaused=false;$('requestTracker').hidden=true;finished=[];traceRows=[];pendingReplicas=[];trafficEpoch=clock;credits={text:0,vision:0,embedding:0,rerank:0};droppedByLane={text:0,vision:0,embedding:0,rerank:0};requests=[];effects=[];completed=0;traceCount=0;dropped=0;latencies=[];arrival=0;focusId=null;focusStage='';$('traceSteps').hidden=true;}
+  function resetTraffic(){controlEvents=[];trackedRecord=null;trackerPaused=false;$('requestTracker').hidden=true;finished=[];traceRows=[];pendingReplicas=[];trafficEpoch=clock;credits={text:0,vision:0,embedding:0,rerank:0};droppedByLane={text:0,vision:0,embedding:0,rerank:0};requests=[];effects=[];completed=0;traceCount=0;dropped=0;latencies=[];arrival=0;focusId=null;focusStage='';$('traceSteps').hidden=true;}
   function removeControl(p){const c=catalog[p.type],label='Remove '+c.name+(p.gpus.length>1?' (entire '+p.gpus.length+'-GPU copy)':' copy');return '<button type="button" class="remove-model" data-remove="'+p.id+'" draggable="false" title="'+label+'" aria-label="'+label+'">×</button>';}
   function tag(p){const c=catalog[p.type],status=engine.status(p);const button='<button class="pod-tag '+runtime+' '+(status!=='ready'?'bad':'')+'" style="--tone:'+c.color+'" draggable="true" data-pid="'+p.id+'" aria-label="Inspect or drag '+c.name+'"><span class="tag-art">'+art(modelArt(c))+'</span><span>'+c.name+(status!=='ready'?' · !':'')+'<small>'+(p.target==='cloud'?'Hosted service':modes[runtime].unit)+'</small></span></button>';return c.kind==='model'?'<div class="hardware-model-item compact">'+button+removeControl(p)+'</div>':button;}
   function render(){
     $('shelf').innerHTML=Object.entries(catalog).filter(([key,c])=>c.kind==='model'||(key==='notebook'?engine.placements.some(p=>p.type==='hub'):engine.placements.some(p=>p.type===key))).filter(([,c])=>catalogFilter==='all'||(catalogFilter==='search'?['embedding','rerank'].includes(c.task):c.task===catalogFilter)).map(([key,c])=>`<button class="workload-card ${selection?.type===key&&!selection.moveId?'selected':''}" style="--tone:${c.color}" data-workload="${key}" draggable="true" aria-pressed="${selection?.type===key&&!selection.moveId?'true':'false'}"><span class="badge">${art(modelArt(c))}</span><span><b>${c.name}</b><small>${c.kind==='model'?taskFor(c).label+' · '+c.format+'<br>~'+c.memory+' GB base + '+engine.kvBudget(key).toFixed(2)+' GB KV':c.kind==='notebook'?'6 GB · CPU or GPU':'CPU software'}</small></span><span class="drag-dots" aria-hidden="true">⠿</span></button>`).join('');
-    const per=8/engine.machineCount;
-    $('rack').className='rack'+(engine.machineCount===1?' one':'');
-    $('rack').innerHTML=Array.from({length:engine.machineCount},(_,h)=>{
-      const cpu=engine.placements.filter(p=>p.target==='cpu'&&p.host===h),ram=cpu.reduce((s,p)=>s+engine.memory(p.type),0);
-      return `<section class="host ${engine.failed.has(h)?'offline':''}" id="host-${h}"><div class="host-heading"><i class="machine-light"></i><b>Machine ${h+1}</b><small>CPU + ${per} GPUs</small><button class="power" data-power="${h}" aria-label="${engine.failed.has(h)?'Power on':'Power off'} machine ${h+1}" aria-pressed="${!engine.failed.has(h)}">⏻</button></div><div class="server-art">${art('server')}</div><div class="cpu-area drop-target" id="cpu-${h}" data-target="cpu" data-index="${h}" role="button" tabindex="0" aria-label="Place software on machine ${h+1} CPU"><span class="cpu-art">${art('cpu')}</span><div class="cpu-content"><div class="area-label"><span>CPU + RAM</span><small>${ram} / 128 GB RAM</small></div><div class="cpu-slots">${cpu.length?cpu.map(tag).join(''):'<span class="empty-note">Ordinary programs run here</span>'}</div></div></div><div class="gpu-grid">${Array.from({length:per},(_,g)=>{
-        const n=h*per+g,jobs=engine.gpuJobs(n),used=engine.gpuUsed(n),bad=jobs.some(p=>engine.status(p)!=='ready');
-        const chips=jobs.map(p=>{const c=catalog[p.type];return '<div class="hardware-model-item"><button class="gpu-workload '+runtime+' '+(selectedId===p.id?'selected':'')+'" style="--tone:'+c.color+'" data-pid="'+p.id+'" draggable="true" aria-label="Inspect or drag '+c.name+'"><span class="tag-art">'+art(modelArt(c))+'</span><span><b>'+c.name+'</b><small>'+modes[runtime].unit+' · '+(p.gpus.length>1?'piece '+(p.gpus.indexOf(n)+1)+'/'+p.gpus.length:'whole copy')+' · ~'+(engine.memory(p.type)/p.gpus.length).toFixed(1)+' GB</small></span></button>'+removeControl(p)+'</div>';}).join('');
-        const segments=jobs.map(p=>'<i style="width:'+(catalog[p.type].memory/p.gpus.length/engine.vram*100)+'%;background:'+catalog[p.type].color+'" title="'+catalog[p.type].name+' base reservation"></i><i class="kv-segment" style="width:'+(engine.kvBudget(p.type)/p.gpus.length/engine.vram*100)+'%" title="KV cache reservation"></i>').join('');
-        return '<section id="gpu-'+n+'" class="gpu drop-target '+runtime+' '+(jobs.length?'occupied':'')+' '+(bad?'bad':'')+'" style="--tone:'+(jobs[0]?catalog[jobs[0].type].color:'#68dfc6')+'" data-target="gpu" data-index="'+n+'" role="group" tabindex="0" aria-label="GPU '+(n+1)+', '+jobs.length+' workloads, '+used.toFixed(1)+' of 96 GB estimated"><span class="gpu-head"><span>GPU '+String(n+1).padStart(2,'0')+'</span><span>96 GB</span></span><span class="gpu-art">'+art('gpu')+'</span><span class="software-unit">RTX PRO 6000 · '+(jobs.some(p=>p.gpus.length>1)?'dedicated model worker':engine.sharing?'sharing enabled':'dedicated access')+'</span><div class="gpu-workloads">'+(chips||'<span class="gpu-empty">Drop a model here</span>')+'</div><span class="gpu-detail">'+used.toFixed(1)+' / 96 GB estimated · '+Math.max(0,96-used).toFixed(1)+' GB free</span><span class="vram-track segmented">'+segments+'</span><span class="kv-live" id="kv-live-'+n+'"></span><span class="gpu-add">'+(engine.sharing&&!jobs.some(p=>p.gpus.length>1)?'+ Drop another model if it fits':jobs.length?'Move models using their labels':'Choose a model to place')+'</span></section>';
-      }).join('')}</div></section>`;
-    }).join('');
-    $('cloudSlots').innerHTML=engine.placements.filter(p=>p.target==='cloud').map(tag).join('');
+    renderRack();
+    $('cloudSlots').innerHTML=engine.placements.filter(p=>p.target==='cloud').map(p=>podMarkup(p)).join('');
     document.body.dataset.runtime=runtime;
     $('clusterTitle').textContent=modes[runtime].title;
     $('runtime').value=runtime;$('runtimeHelp').textContent=modes[runtime].description;
@@ -229,7 +246,7 @@
     document.querySelector('.endpoints').hidden=!hasAPI&&!cloudOn;
     document.querySelector('.network-band').hidden=!hasAPI&&!cloudOn;
     $('basicGuide').hidden=engine.placements.length>0;
-    $('storage').hidden=!storageOn;document.querySelector('.management').hidden=!gitops;
+    $('storage').hidden=!storageOn;document.querySelector('.management').hidden=runtime!=='kubernetes';$('git').hidden=!gitops;$('argo').hidden=!gitops;document.querySelectorAll('.gitops-arrow').forEach(el=>el.hidden=!gitops);$('deploy').textContent=gitops?'Replay deployment ↻':'Replay placement ↻';
     ['api','hub','langfuse'].forEach(t=>$('feature-'+t).checked=engine.placements.some(p=>p.type===t));
     $('feature-storage').checked=storageOn;$('feature-cloud').checked=cloudOn;$('feature-gitops').checked=gitops;$('feature-heal').checked=heal;
     $('feature-gitops').disabled=runtime!=='kubernetes';$('feature-heal').disabled=runtime!=='kubernetes';$('kubeHint').hidden=runtime==='kubernetes';
@@ -258,7 +275,7 @@
     if(previous?.target==='gpu'&&target==='gpu')engine.split=previous.gpus.length;
     const result=engine.place(payload.type,target,index,payload.moveId);engine.split=split;
     if(!result.ok){notify(result.message,true);log(result.message);return;}
-    if(catalog[result.placement.type].kind==='model'){engine.route=result.placement.type;}selection=null;selectedId=result.placement.id;presetName='';render();notify(result.message);log(result.message);inspectPlacement(result.placement.id);deployUntil=clock+3;
+    if(catalog[result.placement.type].kind==='model'){engine.route=result.placement.type;}selection=null;selectedId=result.placement.id;presetName='';render();notify(result.message);log(result.message);inspectPlacement(result.placement.id);startControl([result.placement.id]);
   }
   function inspectPlacement(id){
     const p=engine.placements.find(p=>p.id===id);if(!p)return;
@@ -294,7 +311,7 @@
     const w=e.target.closest('[data-workload]');if(w){selectWorkload(w.dataset.workload);return;}
     const move=e.target.closest('[data-move]');if(move){const p=engine.placements.find(p=>p.id===move.dataset.move);if(p)selectWorkload(p.type,p.id);return;}
     const remove=e.target.closest('[data-remove]');if(remove){const p=engine.placements.find(p=>p.id===remove.dataset.remove);if(p){engine.remove(p.id);for(const r of requests){if(r.pid===p.id){r.stage='queue';r.pid=null;r.progress=0;}}selection=null;selectedId=null;focusId=null;presetName='';render();const message=catalog[p.type].name+' copy removed'+(p.gpus.length>1?' from all '+p.gpus.length+' GPUs':'')+'.';log(message);notify(message);inspector('Workload removed.','Its memory is available again. Requests for that model wait or go to another ready copy. Other models on the same card keep running.');}return;}
-    const power=e.target.closest('[data-power]');if(power){const h=+power.dataset.power;if(engine.failed.has(h))engine.failed.delete(h);else engine.failed.add(h);presetName='';log('Machine '+(h+1)+(engine.failed.has(h)?' powered off. Its jobs are unavailable.':' powered on. Its jobs can resume.'));if(runtime==='kubernetes'&&heal){recoverWorkloads();if(recoveryPending().length)log('Some workloads are Pending recovery until suitable resources become available.');}render();return;}
+    const power=e.target.closest('[data-power]');if(power){const h=+power.dataset.power;if(engine.failed.has(h))engine.failed.delete(h);else engine.failed.add(h);controlEvents=[];for(const r of requests){const p=engine.placements.find(p=>p.id===r.pid);if(p&&engine.status(p)!=='ready'&&r.stage!=='done'){r.stage='queue';r.pid=null;r.progress=0;r.retries=(r.retries||0)+1;}}presetName='';log('Machine '+(h+1)+(engine.failed.has(h)?' powered off. Its jobs are unavailable.':' powered on. Its jobs can resume.'));if(runtime==='kubernetes'&&heal){recoverWorkloads();if(recoveryPending().length)log('Some workloads are Pending recovery until suitable resources become available.');}render();return;}
     const arch=e.target.closest('[data-architecture]');if(arch){engine.architecture(+arch.dataset.architecture);presetName='';render();log('Rearranged 8 GPUs across '+engine.machineCount+' machine(s).');inspector('Same GPUs. Different connections.','GPU numbers stay the same. The new machine boundaries change which model pieces talk locally and which communicate over the network. This instant rearrangement is a teaching shortcut; real hardware must be provisioned.');return;}
     const pre=e.target.closest('[data-preset]');if(pre){preset(pre.dataset.preset);return;}
     const target=e.target.closest('.drop-target');if(target&&selection){placeSelected(target.dataset.target,+target.dataset.index);return;}
@@ -302,7 +319,7 @@
     if(target){const type=target.dataset.target;if(type==='gpu'){const g=+target.dataset.index;inspector('GPU '+(g+1)+' · '+engine.gpuJobs(g).length+' workloads','This physical card holds 96 GB. About '+engine.gpuUsed(g).toFixed(1)+' GB is reserved in the lab. Enable sharing to place multiple small models here; they share compute as well as memory. A model too large for this card needs an explicit multi-GPU split. Click a model label to move or remove that specific copy.','HARDWARE');}else if(type==='cpu')inspector('CPU · general-purpose compute','This machine has a CPU for ordinary programs and 128 GB of working memory in this demo. Put App / inference API, JupyterHub, or Langfuse here. Models can also use a CPU, but this simulation makes them slower.','HARDWARE');else inspector('An online model endpoint','Drop a model here to use a provider’s hardware. The app still needs your CPU. The model uses no local GPUs, but it needs a network connection.','EXTERNAL SERVICE');return;}
     const inspect=e.target.closest('[data-inspect]');if(inspect){focusId=null;inspector(...descriptions[inspect.dataset.inspect]);}
   });
-  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&selection){selection=null;render();}if((e.key==='Enter'||e.key===' ')&&e.target.matches('[role="button"],.gpu.drop-target')){e.preventDefault();e.target.click();}});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&selection){selection=null;render();}if((e.key==='Enter'||e.key===' ')&&e.target.matches('[role="button"],.device-stack.drop-target')){e.preventDefault();e.target.click();}});
   document.addEventListener('dragstart',e=>{
     const card=e.target.closest('[data-workload]'),placed=e.target.closest('[data-pid]');let data=null;
     if(card)data={type:card.dataset.workload,moveId:null};else if(placed){const p=engine.placements.find(p=>p.id===placed.dataset.pid);if(p)data={type:p.type,moveId:p.id};}
@@ -317,7 +334,7 @@
     if(on&&!engine.placements.some(p=>p.type===type)){
       let result;for(let h=0;h<engine.machineCount;h++){if(engine.failed.has(h))continue;result=engine.place(type,'cpu',h);if(result.ok)break;}
       if(!result?.ok){notify(result?.message||'Power on a machine first.',true);render();return;}
-      if(type==='langfuse'||type==='hub')storageOn=true;
+      if(type==='langfuse'||type==='hub')storageOn=true;startControl([result.placement.id]);
       if(type==='api'&&+$('traffic').value===0){$('traffic').value=1;$('trafficOut').value='1 / sec';}
       log(catalog[type].name+' added as a '+modes[runtime].unit.toLowerCase()+'.'+(type==='langfuse'?' Persistent storage added for traces.':''));
       inspector(catalog[type].name+' is now running.',catalog[type].description+(type==='api'?' Next, drag a model onto a GPU so the app has something to ask.':type==='hub'?' You can now drag a notebook onto a CPU or GPU.':' Pink trace records will appear after the app completes requests.'),'FEATURE ADDED');
@@ -326,10 +343,10 @@
   }
   ['api','hub','langfuse'].forEach(t=>$('feature-'+t).onchange=e=>featureService(t,e.target.checked));
   $('firstApp').onclick=()=>{featureService('api',true);selectWorkload('small');notify('The chatbot app is ready. Click or drop Qwen3-8B on a GPU.');};
-  $('runtime').onchange=e=>{runtime=e.target.value;if(runtime!=='kubernetes'){gitops=false;heal=false;pendingReplicas=[];}else{heal=true;recoverWorkloads();}presetName='';render();inspector(modes[runtime].name,modes[runtime].description+' '+(runtime==='kubernetes'?'Automatic failover is enabled. GitOps remains an optional extra.':'Moving between machines still needs your own setup.'),'SOFTWARE LAYER');log('Execution layer: '+modes[runtime].name+'.');};
+  $('runtime').onchange=e=>{controlEvents=[];runtime=e.target.value;if(runtime!=='kubernetes'){gitops=false;heal=false;pendingReplicas=[];}else{heal=true;recoverWorkloads();}presetName='';render();inspector(modes[runtime].name,modes[runtime].description+' '+(runtime==='kubernetes'?'Automatic failover is enabled. GitOps remains an optional extra.':'Moving between machines still needs your own setup.'),'SOFTWARE LAYER');log('Execution layer: '+modes[runtime].name+'.');};
   $('feature-storage').onchange=e=>{if(!e.target.checked&&engine.placements.some(p=>p.type==='langfuse')){notify('Langfuse needs its trace storage in this lab. Turn off Langfuse first.',true);render();return;}storageOn=e.target.checked;render();log(storageOn?'Persistent storage connected.':'Persistent storage removed; notebook files are now temporary.');};
   $('feature-cloud').onchange=e=>{cloudOn=e.target.checked;if(!cloudOn)engine.placements=engine.placements.filter(p=>p.target!=='cloud');render();log(cloudOn?'Online model endpoint added. Drop a model into the cloud.':'Online model endpoint and its models removed.');};
-  $('feature-gitops').onchange=e=>{gitops=runtime==='kubernetes'&&e.target.checked;render();if(gitops){deployUntil=clock+5;inspector('GitOps adds a saved, repeatable plan.','Git stores the desired setup. Argo CD reads it and sends changes to Kubernetes. Blue pulses are deployment instructions; mint and orange dots are live user traffic.','FEATURE ADDED');}};
+  $('feature-gitops').onchange=e=>{gitops=runtime==='kubernetes'&&e.target.checked;render();if(gitops){startControl(engine.placements.map(p=>p.id),'deployment',true);inspector('GitOps adds a saved, repeatable plan.','Git stores the desired setup. Argo CD reads it and sends changes to Kubernetes. Blue pulses are deployment instructions; mint and orange dots are live user traffic.','FEATURE ADDED');}};
   $('feature-heal').onchange=e=>{heal=runtime==='kubernetes'&&e.target.checked;if(heal)recoverWorkloads();render();inspector('Recovery needs spare room.','Kubernetes controllers recreate managed workloads on working machines. This lab also assumes a distributed-job controller coordinates multi-GPU workers. Pending jobs retry when resources become free. Node failure detection and model loading are accelerated here; real recovery takes time.','OPTIONAL KUBERNETES FEATURE');};
   $('sharing').onchange=e=>{const result=engine.setSharing(e.target.checked);if(!result.ok){notify(result.message,true);render();return;}presetName='';render();log(engine.sharing?'GPU sharing enabled. Memory remains local to each card.':'Dedicated GPU access enabled.');};
   $('mixedTraffic').onchange=e=>{mixedTraffic=e.target.checked;render();log(mixedTraffic?'Traffic follows the four workload-mix sliders, including types with no model deployed. Follow one request uses the selected model.':'New traffic uses the selected model.');};
@@ -342,31 +359,25 @@
   $('play').onclick=togglePause;
   $('helpButton').onclick=()=>$('help').showModal();$('closeHelp').onclick=()=>$('help').close();
   $('help').addEventListener('click',e=>{if(e.target===$('help')){const r=$('help').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)$('help').close();}});
-  $('deploy').onclick=()=>{deployUntil=clock+5;if(paused)togglePause();focusId=null;inspector('The plan travels; then software runs.','Blue dashed messages show Git → Argo CD → Kubernetes → machines. These are setup instructions, separate from live user requests. In this sandbox a drop changes the simulated plan immediately.');log('Replaying a deployment: Git → Argo CD → Kubernetes.');};
+  $('deploy').onclick=()=>{controlEvents=[];startControl(engine.placements.filter(p=>engine.status(p)==='ready').map(p=>p.id),'deployment',gitops);if(paused)togglePause();focusId=null;inspector('One placement event.','Dashed instructions move once from Git to Argo CD to Kubernetes, then to the target machines. Requests use separate solid lines. Recovery only sends Kubernetes-to-machine instructions.');log('Replaying deployment instructions once.');};
   $('send').onclick=()=>{if(!engine.service('api')){notify('Enable a working App / API first.',true);return;}if(paused)togglePause();const r=newRequest(true);if(!r){notify('This model’s request buffer is full. Let it drain or add capacity.',true);return;}focusId=r.id;focusStage='';showFollow(r);log('Following request #'+r.id+'. Watch the larger highlighted dot.');};
-  function elementFor(p){if(!p)return null;return p.target==='gpu'?document.querySelector('#gpu-'+p.gpus[0]+' [data-pid="'+p.id+'"]'):document.querySelector((p.target==='cloud'?'#cloudSlots':'#cpu-'+p.host)+' [data-pid="'+p.id+'"]');}
+  function elementFor(p){return p?$('logical-'+p.id):null;}
   function rect(el){if(!el||!el.getClientRects().length)return null;const r=el.getBoundingClientRect(),b=board.getBoundingClientRect();return {x:r.left-b.left,y:r.top-b.top,w:r.width,h:r.height};}
   function port(el,side='bottom'){const r=rect(el);if(!r)return null;return side==='top'?{x:r.x+r.w/2,y:r.y}:side==='bottom'?{x:r.x+r.w/2,y:r.y+r.h}:side==='left'?{x:r.x,y:r.y+r.h/2}:{x:r.x+r.w,y:r.y+r.h/2};}
   function path(points,color=colors.request,style='solid'){if(points.some(x=>!x))return null;const lengths=points.slice(1).map((p,i)=>Math.hypot(p.x-points[i].x,p.y-points[i].y));return {points,lengths,length:lengths.reduce((a,b)=>a+b,0),color,style};}
   function elbow(a,b,y,color,style){return a&&b?path([a,{x:a.x,y},{x:b.x,y},b],color,style):null;}
   function measure(){
     width=board.clientWidth;height=board.clientHeight;const dpr=Math.min(devicePixelRatio||1,2);canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);canvas.style.width=width+'px';canvas.style.height=height+'px';ctx.setTransform(dpr,0,0,dpr,0,0);paths={};rects={};
-    paths.entry=path([port($('clients'),'right'),port($('gateway'),'left')]);
-    const api=engine.service('api'),apiEl=elementFor(api),gate=port($('gateway')),bus=(gate?.y||20)+30;
-    if(apiEl){paths.api=elbow(gate,port(apiEl,'top'),bus);rects.api=rect(apiEl);}
     for(const p of engine.placements){
       const el=elementFor(p);rects[p.id]=rect(el);
-      if(catalog[p.type].kind==='model'&&apiEl){
-        const a=port(apiEl,p.target==='cloud'?'top':'bottom'),b=port(el,'top');
-        paths['model-'+p.id]=elbow(a,b,p.target==='cloud'?bus+15:Math.min(a.y+13,b.y-8));
-      }
-      if(p.target==='gpu'&&p.gpus.length>1){
-        for(let j=1;j<p.gpus.length;j++){const a=port($('gpu-'+p.gpus[0])),b=port($('gpu-'+p.gpus[j]));paths['shard-'+p.id+'-'+j]=elbow(a,b,Math.max(a.y,b.y)+5,colors.exchange);}
-      }
-      if(p.type==='notebook'&&storageOn){const a=port($('storage'),'top'),b=port(el);paths['data-'+p.id]=elbow(a,b,a.y-7,colors.trace);}
+      if(p.target==='gpu'&&p.gpus.length>1){for(let j=1;j<p.gpus.length;j++){const a=port(el,'top'),b=port($('logical-'+p.id+'-g'+p.gpus[j]),'top');if(a&&b)paths['shard-'+p.id+'-'+j]=elbow(a,b,Math.min(a.y,b.y)-6,colors.exchange);}}
+      if(p.type==='notebook'&&storageOn){const a=port($('storage'),'top'),b=port(el);if(a&&b)paths['data-'+p.id]=elbow(a,b,a.y-7,colors.trace);}
     }
-    const lf=engine.service('langfuse'),lfEl=elementFor(lf);if(apiEl&&lfEl){paths.trace=elbow(port(apiEl,'top'),port(lfEl,'top'),bus+23,colors.trace);if(storageOn)paths.save=elbow(port(lfEl),port($('storage'),'top'),port($('storage'),'top').y-8,colors.trace);}
-    if(gitops){paths.git=path([port($('git'),'right'),port($('argo'),'left')],colors.deployment,'dash');paths.argo=path([port($('argo'),'right'),port($('k8s'),'left')],colors.deployment,'dash');const k=port($('k8s'),'top');paths.deploy=elbow(k,port($('cpu-0'),'left'),k.y-12,colors.deployment,'dash');}
+    if(runtime==='kubernetes'){
+      if(gitops){paths.git=path([port($('git'),'right'),port($('argo'),'left')],colors.deployment,'dash');paths.argo=path([port($('argo'),'right'),port($('k8s'),'left')],colors.deployment,'dash');}
+      const a=port($('k8s'),'top');
+      for(let h=0;h<engine.machineCount;h++){const b=port($('node-port-'+h),'left'),r=rect($('rack'));if(a&&b&&r)paths['schedule-node-'+h]=path([a,{x:a.x,y:a.y-14},{x:r.x-22,y:a.y-14},{x:r.x-22,y:r.y-18},{x:b.x-12,y:r.y-18},{x:b.x-12,y:b.y},b],colors.deployment,'dash');}
+    }
     layerPaths();
   }
   function sample(p,t){if(!p||!p.length)return null;let d=Math.min(1,Math.max(0,t))*p.length;for(let i=0;i<p.lengths.length;i++){const l=p.lengths[i];if(d<=l||i===p.lengths.length-1){const a=p.points[i],b=p.points[i+1],u=l?d/l:0;return{x:a.x+(b.x-a.x)*u,y:a.y+(b.y-a.y)*u};}d-=l;}return p.points[0];}
@@ -374,12 +385,14 @@
   function reverse(p){return p?path([...p.points].reverse(),p.color):null;}
   function newRequest(focused=false){const type=focused?engine.route:chooseType();if(!type)return null;const task=laneOf(type);if(requests.length>=400||requests.filter(r=>r.type===type).length>=80){dropped++;droppedByLane[task]++;return null;}const r={id:++requestId,born:clock,stage:'entry',progress:0,duration:.8,pid:null,type,focused,wait:0,computeTime:0};requests.push(r);return r;}
   function showFollow(r){
-    if(r.id!==focusId)return;const changed=focusStage!==r.stage;
-    if(changed){focusStage=r.stage;r.visited=r.visited||{};r.visited[r.stage]=true;if(trackStepMode&&!paused){trackerPaused=true;togglePause();}}
+    if(r.id!==focusId)return;const stage=journeyStage(r),changed=focusStage!==stage;
+    if(changed){focusStage=stage;r.visited=r.visited||{};r.visited[stage]=true;if(trackStepMode&&!paused){trackerPaused=true;togglePause();}}
     updateTracker(r);
   }
   function tick(dt){
-    clock+=dt;arrival+=dt*+$('traffic').value;
+    clock+=dt;engine.now=clock;controlEvents=controlEvents.filter(e=>clock<e.start+e.duration);
+    let becameReady=false;for(const p of engine.placements){if(p.readyAt&&clock>=p.readyAt){delete p.readyAt;becameReady=true;}}if(becameReady){renderRecovery();updateLayerMetrics();}
+    arrival+=dt*+$('traffic').value;
     while(arrival>=1){arrival--;newRequest();}
     if(runtime==='kubernetes'&&pendingReplicas.length&&clock-lastSchedule>2){lastSchedule=clock;const remaining=[];let changed=false;for(const pending of pendingReplicas){if(scheduleReplica(pending.type))changed=true;else remaining.push(pending);}pendingReplicas=remaining;if(changed)render();}
     if(runtime==='kubernetes'&&heal&&clock-lastRecovery>1){lastRecovery=clock;if(recoverWorkloads().length)render();}
@@ -397,10 +410,10 @@
         if(r.stage==='entry')r.stage='queue';
         else if(r.stage==='travel'){r.stage='compute';r.duration=1;}
         else if(r.stage==='compute'){r.stage='return';r.duration=.85;}
-        else if(r.stage==='return'){r.stage='done';completed++;recordCompletion(r);latencies.push(clock-r.born);if(latencies.length>30)latencies.shift();if(engine.service('langfuse')){traceCount++;effects.push({start:clock,duration:1.4,key:'trace'});effects.push({start:clock+1.4,duration:1.2,key:'save'});}}
+        else if(r.stage==='return'){r.stage='done';completed++;recordCompletion(r);latencies.push(clock-r.born);if(latencies.length>30)latencies.shift();if(engine.service('langfuse'))traceCount++;}
       }
     }
-    const guide=requests.find(r=>r.id===focusId);if(guide&&guide.stage!==focusStage){showFollow(guide);if(paused){requests=requests.filter(r=>r.stage!=='done');return;}}
+    const guide=requests.find(r=>r.id===focusId);if(guide&&journeyStage(guide)!==focusStage){showFollow(guide);if(paused){requests=requests.filter(r=>r.stage!=='done');return;}}
     const busy=new Map();requests.filter(r=>r.stage==='travel'||r.stage==='compute').forEach(r=>busy.set(r.pid,(busy.get(r.pid)||0)+1));
     if(api){for(const r of requests.filter(r=>r.stage==='queue')){
       const available=engine.placements.filter(p=>p.type===r.type&&engine.status(p)==='ready'&&(busy.get(p.id)||0)<engine.maxActive(p.type));
@@ -411,11 +424,11 @@
     const focus=requests.find(r=>r.id===focusId);if(focus)showFollow(focus);
     requests=requests.filter(r=>r.stage!=='done');effects=effects.filter(e=>clock<e.start+e.duration);
   }
-  function wire(p){if(!p)return;ctx.beginPath();p.points.forEach((v,i)=>i?ctx.lineTo(v.x,v.y):ctx.moveTo(v.x,v.y));ctx.strokeStyle=p.color;ctx.globalAlpha=p.style==='dash'?.3:.2;ctx.lineWidth=1.15;ctx.setLineDash(p.style==='dash'?[3,5]:[]);ctx.lineJoin='round';ctx.stroke();ctx.setLineDash([]);ctx.globalAlpha=1;}
+  function wire(p){if(!p)return;ctx.beginPath();p.points.forEach((v,i)=>i?ctx.lineTo(v.x,v.y):ctx.moveTo(v.x,v.y));ctx.strokeStyle=p.color;ctx.globalAlpha=p.style==='dash'?.36:.44;ctx.lineWidth=1.35;ctx.setLineDash(p.style==='dash'?[3,5]:[]);ctx.lineJoin='round';ctx.stroke();ctx.setLineDash([]);ctx.globalAlpha=1;}
   function dot(p,t,color,focused=false){const q=sample(p,t);if(!q)return;ctx.shadowColor=color;ctx.shadowBlur=focused?15:7;ctx.fillStyle=color;ctx.beginPath();ctx.arc(q.x,q.y,focused?5:2.8,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;if(focused){ctx.strokeStyle='#f6fcff';ctx.lineWidth=1;ctx.beginPath();ctx.arc(q.x,q.y,8,0,Math.PI*2);ctx.stroke();}}
   function draw(){
     ctx.clearRect(0,0,width,height);
-    for(const [key,p] of Object.entries(paths)){if((['git','argo','deploy'].includes(key)||key.startsWith('schedule-'))&&clock>deployUntil)continue;if(key==='entry'||key==='api')continue;if(key.startsWith('binding-')&&!requests.some(r=>r.pid===key.slice(8)&&r.stage==='compute')&&selectedId!==key.slice(8))continue;if(key.startsWith('observe-')&&!effects.some(e=>e.key===key))continue;wire(p);}
+    for(const [key,p] of Object.entries(paths)){if(key.startsWith('observe-')&&!effects.some(e=>e.key===key))continue;if(key.startsWith('model-')&&!requests.some(r=>r.pid===key.slice(6)&&['travel','compute','return'].includes(r.stage))&&selectedId!==key.slice(6))continue;wire(p);}
     const entry=join(paths.entry,paths.api),busy=new Set();
     for(const r of requests){
       const focused=r.id===focusId,task=laneOf(r.type),requestColor=lanes[task].color,inputPath=paths['entry-'+task]||entry;
@@ -423,9 +436,9 @@
       else if(r.stage==='travel')dot(paths['model-'+r.pid],r.progress/r.duration,requestColor,focused);
       else if(r.stage==='return')dot(join(reverse(paths['model-'+r.pid]),reverse(inputPath)),r.progress/r.duration,'#f3f0df',focused);
       else if(r.stage==='compute'){
-        dot(paths['binding-'+r.pid],(clock*.7+r.id*.13)%1,requestColor,focused);
+        const podPoint=port(elementFor(engine.placements.find(p=>p.id===r.pid)),'top');if(podPoint)dot(path([podPoint,{x:podPoint.x+.1,y:podPoint.y}]),0,requestColor,focused);
         busy.add(r.pid);const p=engine.placements.find(p=>p.id===r.pid);
-        if(p){const cells=p.target==='gpu'?p.gpus.map(g=>document.querySelector('#gpu-'+g+' [data-pid="'+p.id+'"]')):[elementFor(p)];for(const el of cells){const a=rect(el);if(!a)continue;ctx.strokeStyle=catalog[p.type].color;ctx.globalAlpha=.65;ctx.lineWidth=2.5;ctx.beginPath();ctx.moveTo(a.x+3,a.y+a.h-2);ctx.lineTo(a.x+3+(a.w-6)*Math.min(1,r.progress/r.duration),a.y+a.h-2);ctx.stroke();ctx.globalAlpha=1;}}
+        if(p){const cells=[...document.querySelectorAll('.logical-workload[data-pid="'+p.id+'"]')];for(const el of cells){const a=rect(el);if(!a)continue;ctx.strokeStyle=catalog[p.type].color;ctx.globalAlpha=.65;ctx.lineWidth=2.5;ctx.beginPath();ctx.moveTo(a.x+3,a.y+a.h-2);ctx.lineTo(a.x+3+(a.w-6)*Math.min(1,r.progress/r.duration),a.y+a.h-2);ctx.stroke();ctx.globalAlpha=1;}}
       }
     }
     for(const p of engine.placements){
@@ -436,13 +449,13 @@
       }
     }
     for(const e of effects)if(clock>=e.start)dot(paths[e.key],(clock-e.start)/e.duration,colors.trace);
-    if(clock<deployUntil){for(const p of engine.placements)dot(paths['schedule-'+p.id],(clock*.5)%1,colors.deployment);dot(paths.git,(clock*.6)%1,colors.deployment);dot(paths.argo,(clock*.6+.3)%1,colors.deployment);dot(paths.deploy,(clock*.4)%1,colors.deployment);}
+    if(runtime==='kubernetes')for(const e of controlEvents)if(controlActive(e))dot(paths[e.key],(clock-e.start)/e.duration,colors.deployment);
   }
   function updateMetrics(){
     const reserved=new Set(engine.placements.flatMap(p=>p.gpus)).size,queued=requests.filter(r=>r.stage==='queue').length;
     $('usedMetric').innerHTML=reserved+' <small>/ 8</small>';$('doneMetric').innerHTML=completed+' <small>results</small>';$('queueMetric').innerHTML=queued+' <small>requests</small>';$('queueBadge').textContent=queued+' waiting';
     const latency=latencies.length?latencies.reduce((a,b)=>a+b,0)/latencies.length:null;$('latencyMetric').innerHTML=(latency===null?'—':latency.toFixed(1))+' <small>sec</small>';$('traceCount').textContent=traceCount+' traces saved';
-    const busy=new Set(requests.filter(r=>r.stage==='compute').map(r=>r.pid));for(const p of engine.placements)if(p.type==='notebook'&&engine.status(p)==='ready')busy.add(p.id);document.querySelectorAll('.gpu').forEach(g=>g.classList.toggle('busy',engine.gpuJobs(+g.dataset.index).some(p=>busy.has(p.id))));document.querySelectorAll('.gpu-workload').forEach(c=>c.classList.toggle('busy',busy.has(c.dataset.pid)));
+    const busy=new Set(requests.filter(r=>r.stage==='compute').map(r=>r.pid));for(const p of engine.placements)if(p.type==='notebook'&&engine.status(p)==='ready')busy.add(p.id);document.querySelectorAll('.gpu').forEach(g=>g.classList.toggle('busy',engine.gpuJobs(+g.dataset.index).some(p=>busy.has(p.id))));document.querySelectorAll('.logical-workload').forEach(c=>c.classList.toggle('busy',busy.has(c.dataset.pid)));
     let note='',warning=false;
     if(!engine.placements.length){note='Just hardware for now. Add the App / API feature, then place a model on a GPU.';}
     else if(!engine.service('api')){note='No running App / inference API. Turn on the App / API feature or restore its machine to handle requests.';warning=true;}
@@ -461,5 +474,8 @@
   document.addEventListener('visibilitychange',()=>{last=0;});
   preset(new URLSearchParams(location.search).get('setup')==='basic'?'basic':'platform');if(paused){paused=false;togglePause();}requestAnimationFrame(frame);
   // Expose read-only summaries for local smoke checks and for a curious learner in DevTools.
-  window.flowLab={snapshot:()=>({runtime,storageOn,cloudOn,gitops,heal,machineCount:engine.machineCount,vram:engine.vram,route:engine.route,sharing:engine.sharing,mixedTraffic,kv:{...engine.kv},recoveryPending:recoveryPending().map(p=>p.id),demand:{...demand},laneModels:{...laneModels},pendingReplicas:[...pendingReplicas],queues:Object.fromEntries(Object.keys(lanes).map(k=>[k,requests.filter(r=>r.stage==='queue'&&laneOf(r.type)===k).length])),recentTraces:traceRows.slice(0,6),gpuMemory:Array.from({length:8},(_,i)=>engine.gpuUsed(i)),placements:engine.placements.map(p=>({...p,status:engine.status(p)})),completed,queued:requests.filter(r=>r.stage==='queue').length,traceCount,paused}),version:'6.0'};
+  window.flowLab={snapshot:()=>({clock,requestPath:['People','Service','Pod','Response'],controlEvents:controlEvents.map(e=>({...e,active:controlActive(e)})),pathKeys:Object.keys(paths),requestStates:requests.map(r=>({id:r.id,pid:r.pid,type:r.type,stage:r.stage})),runtime,storageOn,cloudOn,gitops,heal,machineCount:engine.machineCount,vram:engine.vram,route:engine.route,sharing:engine.sharing,mixedTraffic,kv:{...engine.kv},recoveryPending:recoveryPending().map(p=>p.id),demand:{...demand},laneModels:{...laneModels},pendingReplicas:[...pendingReplicas],queues:Object.fromEntries(Object.keys(lanes).map(k=>[k,requests.filter(r=>r.stage==='queue'&&laneOf(r.type)===k).length])),recentTraces:traceRows.slice(0,6),gpuMemory:Array.from({length:8},(_,i)=>engine.gpuUsed(i)),placements:engine.placements.map(p=>({...p,status:engine.status(p)})),completed,queued:requests.filter(r=>r.stage==='queue').length,traceCount,paused}),version:'9.0'};
 })();
+
+
+
